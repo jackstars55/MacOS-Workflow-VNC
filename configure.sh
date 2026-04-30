@@ -8,8 +8,8 @@ cd ~
 USER_NAME=$(whoami)
 echo "Setting password for user: $USER_NAME"
 
-# 2. Set the password for the current user using the VNC_PASSWORD ($2)
-sudo dscl . -passwd /Users/$USER_NAME "$2"
+# 2. Force-reset the password for the current user using sysadminctl (Bypasses old password requirement)
+sudo sysadminctl -resetPasswordFor "$USER_NAME" -newPassword "$2"
 
 # 3. Enable SSH (Remote Login)
 echo "Starting SSH service..."
