@@ -1,40 +1,50 @@
 #!/bin/bash
 # configure.sh VNC_USER_PASSWORD VNC_PASSWORD NGROK_AUTH_TOKEN
 
-# Change to home directory to prevent getcwd permission denied errors in macOS runners
+# Navigate to home to avoid getcwd permission errors
 cd ~
 
-# disable spotlight indexing
-sudo mdutil -i off -a
+# 1. Identify the current user (in GitHub Actions, this is usually 'runner')
+USER_NAME=$(whoami)
+echo "Setting password for user: $USER_NAME"
 
-# Create new account
-sudo dscl . -create /Users/vncuser
-sudo dscl . -create /Users/vncuser UserShell /bin/bash
-sudo dscl . -create /Users/vncuser RealName "VNC User"
-sudo dscl . -create /Users/vncuser UniqueID 1001
-sudo dscl . -create /Users/vncuser PrimaryGroupID 80
-# FIXED: Removed the line break here
-sudo dscl . -create /Users/vncuser NFSHomeDirectory /Users/vncuser
-sudo dscl . -passwd /Users/vncuser "$1"
-sudo dscl . -passwd /Users/vncuser "$1"
-sudo createhomedir -c -u vncuser > /dev/null
+# 2. Set the password for the current user using the VNC_PASSWORD ($2)
+sudo dscl . -passwd /Users/$USER_NAME "$2"
 
-# Enable VNC
-sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers -privs -all
-sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes 
+# 3. Enable SSH (Remote Login)
+echo "Starting SSH service..."
+sudo systemsetup -setremotelogin on || sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist
 
-# VNC password - http://hints.macworld.com/article.php?story=20071103011608872
-echo "$2" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8}).*/$1/; @p = unpack "C*", $_; foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt
-
-# Start VNC/reset changes
-sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -agent -console
-sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate
-
-# install ngrok
+# 4. Install ngrok
+echo "Installing ngrok..."
 brew install ngrok
 
-# configure ngrok and start it
+# 5. Configure ngrok using NGROK_AUTH_TOKEN ($3)
 ngrok config add-authtoken "$3"
 
-# Start ngrok (Removed the '&' so the runner doesn't exit immediately, keeping the tunnel alive)
-ngrok tcp 5900
+# 6. Start ngrok in the background forwarding port 22 (SSH)
+echo "Starting ngrok tunnel..."
+ngrok tcp 22 > /dev/null &
+
+# Give ngrok a few seconds to establish the connection
+sleep 3
+
+# 7. Fetch the public URL from ngrok's local API and print the exact SSH command
+echo "==================================================================="
+curl -s http://localhost:4040/api/tunnels | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    url = data['tunnels'][0]['public_url'].replace('tcp://', '')
+    host, port = url.split(':')
+    print(f'✅ SSH TUNNEL READY!')
+    print(f'Run this command on your local machine:')
+    print(f'ssh $USER_NAME@{host} -p {port}')
+    print(f'(Use your VNC_PASSWORD when prompted)')
+except Exception as e:
+    print('Error fetching ngrok URL. Is the token correct?')
+"
+echo "==================================================================="
+
+# 8. Keep the script running so the runner doesn't exit and kill the tunnel
+wait
